@@ -546,8 +546,8 @@ procedure SaveAntibodiesStats(
    WriteLn(FileAntibodies,
       'Id'        ,  Tab,
       'Fitness'   ,  Tab,
-      'Accuracy'  ,  Tab,
-      'NShare '   ,  Tab,
+    //'Accuracy'  ,  Tab,
+    //'NShare '   ,  Tab,
       'NBound'    ,  Tab,
       'Radius'    ,  Tab,
       'Shape'     );
@@ -557,8 +557,8 @@ procedure SaveAntibodiesStats(
       WriteLn(FileAntibodies,
          i                                      ,  Tab,
          Antibodies._[j].Fitness                ,  Tab,
-         Antibodies._[j].Accuracy               ,  Tab,
-         1 / Antibodies._[j].KShare             ,  Tab,
+       //Antibodies._[j].Accuracy               ,  Tab,
+       //1 / Antibodies._[j].KShare             ,  Tab,
          Antibodies._[j].SumW                   ,  Tab,
          Antibodies._[j].Radius                 ,  Tab,
          Antibodies._[j].Metric                 );

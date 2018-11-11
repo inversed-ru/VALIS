@@ -31,6 +31,8 @@ program VALIS; /////////////////////////////////////////////////////////////////
       http://inversed.ru/AIS.htm
    
 >> ToDo
+   ! Weight matrix should be a part of population 
+     (requires rewriting Problem module)
    - Implement k nearest binding
    - Read the settings from a config file
    ! Monitor more population stats: mean and SD of fitness, radius, NBound, ???
@@ -55,6 +57,11 @@ program VALIS; /////////////////////////////////////////////////////////////////
      - Text generation
    
 >> Changelog
+   1.5  : 2018.11.11 ~ Weight matrix and antibody statistics now updated incrementally
+                     ~ Calculation of individual antibody accuracies and sharing
+                       factors now skipped when the new fitness definition
+                       (AltFitness = True) is used
+                     ~ Overall speedup at least 4x
    1.4  : 2017.12.16 ~ InvLibs compatibility
                      + CalcWeightMatrix procedure
                      ~ Cleanup
@@ -165,20 +172,34 @@ function WeightMul(
    end;
    
    
+// Update the row of antibody-antigen weight matrix W corresponding to 
+// antibody at IndexAB
+procedure UpdateWeightMatrix(
+   var   W           :  TWeightMatrix;
+   const Antibodies  :  TAntibodies;
+         IndexAB     :  Integer;
+   const Antigens    :  TAntigens);
+   var
+         j           :  Integer;
+   begin
+   for j := 0 to Antigens.N - 1 do
+      W[IndexAB, j] := BindingWeight(
+         Distance(Antigens._[j], Antibodies._[IndexAB]),
+         Antibodies._[IndexAB].Radius, BindingFunction);
+   end;
+   
+   
 // Calculate the antibody-antigen binding weights matrix W
 procedure CalcWeightMatrix(
    var   W           :  TWeightMatrix;
    const Antibodies  :  TAntibodies;
    const Antigens    :  TAntigens);
    var
-         i, j        :  Integer;
+         i           :  Integer;
    begin
    SetLength(W, Antibodies.N, Antigens.N);
    for i := 0 to Antibodies.N - 1 do
-      for j := 0 to Antigens.N - 1 do
-         W[i, j] := BindingWeight(
-            Distance(Antigens._[j], Antibodies._[i]),
-            Antibodies._[i].Radius, BindingFunction);
+      UpdateWeightMatrix(W, Antibodies, i, Antigens);
    end;
 
 {-----------------------<< Accuracy and antibody statistics >>----------------------}
@@ -242,31 +263,45 @@ function TestAccuracy(
    Result := CalcAccuracy(Antibodies, Antigens, W); 
    end;
 
-(*
-// Update Antibody - Antigens interaction statistics
-// #TODO implement
-procedure UpdateStats(
-   var   Antibody :  TAntibody;
-   const Antigens :  TAntigens);
+   
+// Calculate Antibody statistics (total weight and class distribution)
+procedure CalcAntibodyStats(
+   var   Antibodies  :  TAntibodies;
+         IndexAB     :  Integer;
+   const W           :  TWeightMatrix;
+   const Antigens    :  TAntigens);
+   var
+         j, k        :  Integer;
    begin
-
+   with Antibodies._[IndexAB] do
+      begin
+      SumW := 0;
+      InitArray(ClassDistr, Antigens.NClasses, Pseudocount);
+      for j := 0 to Antigens.N - 1 do
+         begin
+         SumW := SumW + W[IndexAB, j];
+         k := Antigens._[j].Class_;
+         ClassDistr[k] := ClassDistr[k] + W[IndexAB, j];
+         end;
+      Normalize(ClassDistr, normUnitSum);
+      MajorityClass := RandMaxIndex(ClassDistr);
+      end;
    end;
-*)
+   
 
 // Calculate the antibody statistics
 // #HACK Huge
 procedure CalcStats(
    var   Antibodies     :  TAntibodies;
+   const W              :  TWeightMatrix;
    const Antigens       :  TAntigens);
    var
          i, j, k        :  Integer;
-         W              :  TWeightMatrix;
          SumWAG, F      :  TRealArray;
          RelW,
          BondAccuracy   :  Real;
    begin
    // Calculate total antigen binding weights and coverage
-   CalcWeightMatrix(W, Antibodies, Antigens);
    with Antibodies do
       begin
       Coverage := 0;
@@ -280,44 +315,31 @@ procedure CalcStats(
       Coverage := Coverage / Antigens.N;
       end;
 
-   // Calculate antibody total weights and class distributions
-   for i := 0 to Antibodies.N - 1 do
-      with Antibodies._[i] do
-         begin
-         SumW := 0;
-         InitArray(ClassDistr, Antigens.NClasses, Pseudocount);
-         for j := 0 to Antigens.N - 1 do
+   if not AltFitness then
+      begin
+      // Calculate individual antibody accuracy
+      for i := 0 to Antibodies.N - 1 do
+         with Antibodies._[i] do
             begin
-            SumW := SumW + W[i, j];
-            k := Antigens._[j].Class_;
-            ClassDistr[k] := ClassDistr[k] + W[i, j];
+            Accuracy := 0;
+            for j := 0 to Antigens.N - 1 do
+               Accuracy := Accuracy + ClassDistr[Antigens._[j].Class_] * W[i, j];
+            Accuracy := SafeDiv(Accuracy, SumW, 0);
             end;
-         Normalize(ClassDistr, normUnitSum);
-         MajorityClass := RandMaxIndex(ClassDistr);
-         end;
 
-   // Calculate antibody accuracy
-   for i := 0 to Antibodies.N - 1 do
-      with Antibodies._[i] do
-         begin
-         Accuracy := 0;
-         for j := 0 to Antigens.N - 1 do
-            Accuracy := Accuracy + ClassDistr[Antigens._[j].Class_] * W[i, j];
-         Accuracy := SafeDiv(Accuracy, SumW, 0);
-         end;
-
-   // Calculate the sharing factors
-   for i := 0 to Antibodies.N - 1 do
-      with Antibodies._[i] do
-         begin
-         KShare := 0;
-         for j := 0 to Antigens.N - 1 do
+      // Calculate the sharing factors
+      for i := 0 to Antibodies.N - 1 do
+         with Antibodies._[i] do
             begin
-            Assert(SumWAG[j] >= W[i, j]);
-            KShare := KShare + SafeDiv(Sqr(W[i, j]), SumWAG[j], 0);
+            KShare := 0;
+            for j := 0 to Antigens.N - 1 do
+               begin
+               Assert(SumWAG[j] >= W[i, j]);
+               KShare := KShare + SafeDiv(Sqr(W[i, j]), SumWAG[j], 0);
+               end;
+            KShare := SafeDiv(KShare, SumW, 1);
             end;
-         KShare := SafeDiv(KShare, SumW, 1);
-         end;
+      end;
 
    // Sort the antibodies by total binding weight
    SetLength(F, Antibodies.N);
@@ -416,7 +438,9 @@ procedure Replicate(
 // Which antibodies are replaced depends on the Replacement setting.
 procedure Replace(
    var   Antibodies  :  TAntibodies;
-   const Children    :  TAntibodies);
+   var   W           :  TWeightMatrix;
+   const Children    :  TAntibodies;
+   const Antigens    :  TAntigens);
    var
          i, j, k,
          Which       :  Integer;
@@ -447,7 +471,8 @@ procedure Replace(
          end;
       AssignAntibody(Antibodies._[j], Children._[i]);
       Replaced[j] := True;
-      //UpdateStats(Antibodies._[j], Antigens);
+      UpdateWeightMatrix(W, Antibodies, j, Antigens);
+      CalcAntibodyStats(Antibodies, j, W, Antigens);
       end;
    end;
 
@@ -455,6 +480,7 @@ procedure Replace(
 // Train Antigens on Antibodies for one generation using LearnRate
 procedure OneGeneration(
    var   Antibodies  :  TAntibodies;
+   var   W           :  TWeightMatrix;
    const Antigens    :  TAntigens;
          LearnRate   :  Real);
    var
@@ -463,8 +489,8 @@ procedure OneGeneration(
    Replicate(Children, Antibodies,
       {NChildren:} Round(LearnRate * Antibodies.N),
       {MutationRate:} 1 / (1 + Antigens.NVars), UseCrossover);
-   Replace(Antibodies, Children);
-   CalcStats(Antibodies, Antigens);
+   Replace(Antibodies, W, Children, Antigens);
+   CalcStats(Antibodies, W, Antigens);
    end;
 
 
@@ -479,20 +505,25 @@ procedure Train(
          BestAntibodies :  TAntibodies;
          FileStatus     :  Text;
          PathOut        :  AnsiString;
+         W              :  TWeightMatrix;
    const
          PathStatus     =  'Status.txt';
    begin
    // Initialize the antibodies
    BestAntibodies.Accuracy := 0;
    InitAntibodies(Antibodies, {N:} Round(Antigens.N * Abundance), Antigens);
-   CalcStats(Antibodies, Antigens);
+   // #HACK should be in InitAntibodies
+   CalcWeightMatrix(W, Antibodies, Antigens);
+   for i := 0 to Antibodies.N - 1 do
+      CalcAntibodyStats(Antibodies, i, W, Antigens);
+   CalcStats(Antibodies, W, Antigens);
    
    OpenWrite(FileStatus, PathStatus);
    for i := 1 to MaxGens do
       begin
       // Train, update the best population
       LearnRate := LogBlend(1 / 2, 1 / Antibodies.N, (i - 1) / (MaxGens - 1));
-      OneGeneration(Antibodies, Antigens, LearnRate);
+      OneGeneration(Antibodies, W, Antigens, LearnRate);
       if Antibodies.Accuracy > BestAntibodies.Accuracy then
          CopyAntibodies(BestAntibodies, Antibodies);
          
@@ -610,6 +641,7 @@ procedure CrossValidate(
    SetTrueLength(Accuracies);
    GetMeanStandDev(Mean, SD, Accuracies._);
    WriteLn(FileResults, Mean, ' ', SD);
+   Flush(FileResults);
    end;
 
 
@@ -645,12 +677,15 @@ procedure BatchCrossValidate;
 var
       Antigens    :  TAntigens;
       Antibodies  :  TAntibodies;
+      FileResults :  Text;
 begin
 //Randomize;
 LoadData(Antigens, DirData + PathDelim + 'Data_Iris.txt');
-Train(Antibodies, Antigens);
-SaveAntibodiesStats('Antibodies.txt', Antibodies);
-//CrossValidate(Antigens, {Folds:} 5, {Rounds:} 6, {kNN:} 0);
+//Train(Antibodies, Antigens);
+//SaveAntibodiesStats('Antibodies.txt', Antibodies);
+OpenWrite(FileResults, 'Results.txt');
+CrossValidate(Antigens, {Folds:} 5, {Rounds:} 6, FileResults, {kNN:} 0);
+Close(FileResults);
 //ReadLn;
 //BatchCrossValidate;
 end.

@@ -9,7 +9,7 @@ DISCLAIMER: THE WORKS ARE WITHOUT WARRANTY.
 {$IFDEF FPC} {$MODE DELPHI} {$ENDIF} {$APPTYPE CONSOLE}
 program VALIS; //////////////////////////////////////////////////////////////////////
 {
->> Version: 1.4
+>> Version: 1.6
 
 >> Description
    Implementation of VALIS (Vote-Allocating Immune System) classification algorithm.
@@ -57,6 +57,7 @@ program VALIS; /////////////////////////////////////////////////////////////////
      - Text generation
    
 >> Changelog
+   1.6  : 2018.11.25 * kNNAccuracy returning incorrect results
    1.5  : 2018.11.11 ~ Weight matrix and antibody statistics now updated incrementally
                      ~ Calculation of individual antibody accuracies and sharing
                        factors now skipped when the new fitness definition
@@ -555,17 +556,14 @@ function kNNAccuracy(
    var
          i, k, C,
          NCorrect    :  Integer;
-         D           :  TRealArray;
          Votes       :  TRealArray;
          Order       :  TIntArray;
    begin
-   SetLength(D, TrainSet.N);
    NCorrect := 0;
    for i := 0 to TestSet.N - 1 do
       begin
       // Pick the majority class of k nearest points
       SortByDistance(Order, Trainset, TestSet._[i].x);
-      OrderRealArray(Order, D, soAScending);
       InitArray(Votes, TestSet.NClasses, 0);
       for k := 0 to kNearest - 1 do
          begin
@@ -621,7 +619,7 @@ procedure CrossValidate(
                AppendAntigen(Testset,  Antigens._[Order[i]]) else
                AppendAntigen(Trainset, Antigens._[Order[i]]);
             end;
-            
+
          // Get the classification accuracy
          if kNN = 0 then
             begin
@@ -680,7 +678,7 @@ var
       FileResults :  Text;
 begin
 //Randomize;
-LoadData(Antigens, DirData + PathDelim + 'Data_Iris.txt');
+LoadData(Antigens, DirData + PathDelim + 'Data.txt');
 //Train(Antibodies, Antigens);
 //SaveAntibodiesStats('Antibodies.txt', Antibodies);
 OpenWrite(FileResults, 'Results.txt');

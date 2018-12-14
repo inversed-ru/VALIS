@@ -9,7 +9,7 @@ DISCLAIMER: THE WORKS ARE WITHOUT WARRANTY.
 {$IFDEF FPC} {$MODE DELPHI} {$ENDIF} {$APPTYPE CONSOLE}
 program VALIS; //////////////////////////////////////////////////////////////////////
 {
->> Version: 1.6
+>> Version: 1.7
 
 >> Description
    Implementation of VALIS (Vote-Allocating Immune System) classification algorithm.
@@ -57,8 +57,11 @@ program VALIS; /////////////////////////////////////////////////////////////////
      - Text generation
    
 >> Changelog
+   1.7  : 2018.12.14 ~ CalcAccuracy and TestAccuracy now return classification
+                       results
    1.6  : 2018.11.25 * kNNAccuracy returning incorrect results
-   1.5  : 2018.11.11 ~ Weight matrix and antibody statistics now updated incrementally
+   1.5  : 2018.11.11 ~ Weight matrix and antibody statistics now updated
+                       incrementally
                      ~ Calculation of individual antibody accuracies and sharing
                        factors now skipped when the new fitness definition
                        (AltFitness = True) is used
@@ -127,7 +130,7 @@ const
       Replacement       =  repFitness;
       SumWFrac          =  8;
       Abundance         =  1;
-      MaxGens           =  600;
+      MaxGens           =  1200;
       SaveVis           =  False;
       PathVis           =  'Visualization' + PathDelim;
       DirData           =  'Datasets';
@@ -207,6 +210,7 @@ procedure CalcWeightMatrix(
 
 // Return the classification accuracy given a weight matrix W
 function CalcAccuracy(
+   var   Results     :  TIntArray;
    const Antibodies  :  TAntibodies;
    const Antigens    :  TAntigens;
    const W           :  TWeightMatrix
@@ -220,6 +224,7 @@ function CalcAccuracy(
          MinRelD     :  Real;
    begin
    NCorrect := 0;
+   SetLength(Results, Antigens.N);
    for j := 0 to Antigens.N - 1 do
       begin
       // Count the votes
@@ -246,14 +251,16 @@ function CalcAccuracy(
 
       // Select the class with them most votes as the classification result
       Voted := RandMaxIndex(Votes);
+      Results[j] := Voted;
       NCorrect := NCorrect + Ord(Antigens._[j].Class_ = Voted);
       end;
    Result := NCorrect / Antigens.N;
    end;
 
 
-// Return the classification accuracy
+// Return the classification accuracy and classification Results
 function TestAccuracy(
+   var   Results     :  TIntArray;
    const Antibodies  :  TAntibodies;
    const Antigens    :  TAntigens
          )           :  Real;
@@ -261,7 +268,7 @@ function TestAccuracy(
          W           :  TWeightMatrix;
    begin
    CalcWeightMatrix(W, Antibodies, Antigens);
-   Result := CalcAccuracy(Antibodies, Antigens, W); 
+   Result := CalcAccuracy(Results, Antibodies, Antigens, W); 
    end;
 
    
@@ -297,10 +304,11 @@ procedure CalcStats(
    const W              :  TWeightMatrix;
    const Antigens       :  TAntigens);
    var
-         i, j, k        :  Integer;
+         i, j           :  Integer;
          SumWAG, F      :  TRealArray;
          RelW,
          BondAccuracy   :  Real;
+         DummyResults   :  TIntArray;
    begin
    // Calculate total antigen binding weights and coverage
    with Antibodies do
@@ -375,10 +383,10 @@ procedure CalcStats(
    SetLength(F, Antibodies.N);
    for i := 0 to Antibodies.N - 1 do
       F[i] := Antibodies._[i].Fitness;
-   OrderRealArray(Antibodies.OrderFitness, F, soAScending);
+   OrderRealArray(Antibodies.OrderFitness, F, soAscending);
 
    // Set the overall classification accuracy
-   Antibodies.Accuracy := CalcAccuracy(Antibodies, Antigens, W);
+   Antibodies.Accuracy := CalcAccuracy(DummyResults, Antibodies, Antigens, W);
    end;
 
 {-----------------------<< Training >>----------------------------------------------}
@@ -579,22 +587,22 @@ function kNNAccuracy(
 // Run multiple rounds of k-fold crossvalidation, save results to FileResults.
 // If kNN > 0, use kNN classification
 procedure CrossValidate(
-   const Antigens    :  TAntigens;
-         Folds,
-         Rounds      :  Integer;
-   var   FileResults :  Text;
-         kNN         :  Integer     =  0);
-   var
-         i, j, k,
-         L, R        :  Integer;
-         Order       :  TIntArray;
-         TrainSet,
-         TestSet     :  TAntigens;
-         Antibodies  :  TAntibodies;
-         Accuracies  :  TRealArrayN;
+   const Antigens       :  TAntigens;
+         Folds,   
+         Rounds         :  Integer;
+   var   FileResults    :  Text;
+         kNN            :  Integer     =  0);
+   var   
+         i, j, k, L, R  :  Integer;
+         Order          :  TIntArray;
+         TrainSet,   
+         TestSet        :  TAntigens;
+         Antibodies     :  TAntibodies;
+         Accuracies     :  TRealArrayN;
          FoldAccuracy,
          RoundCorrect,
-         Mean, SD    :  Real;
+         Mean, SD       :  Real;
+         DummyResults   :  TIntArray;
    begin
    // Run multiple crossvalidation rounds with different data partitioning
    InitArrayN(Accuracies, 0);
@@ -624,7 +632,7 @@ procedure CrossValidate(
          if kNN = 0 then
             begin
             Train(Antibodies, TrainSet);
-            FoldAccuracy := TestAccuracy(Antibodies, TestSet);
+            FoldAccuracy := TestAccuracy(DummyResults, Antibodies, TestSet);
             end
          else
             FoldAccuracy := kNNAccuracy(Testset, Trainset, kNN);
@@ -673,17 +681,22 @@ procedure BatchCrossValidate;
 
 /////////////////////////////////////////////////////////////////////////////////////
 var
-      Antigens    :  TAntigens;
+      Antigens,
+      TestData    :  TAntigens;
       Antibodies  :  TAntibodies;
       FileResults :  Text;
+      Results     :  TIntArray;
 begin
 //Randomize;
-LoadData(Antigens, DirData + PathDelim + 'Data.txt');
+LoadData(Antigens, DirData + PathDelim + 'Data_Iris.txt');
 //Train(Antibodies, Antigens);
 //SaveAntibodiesStats('Antibodies.txt', Antibodies);
+//LoadData(TestData, DirData + PathDelim + 'Testset.txt');
+//TestAccuracy(Results, Antibodies, TestData);
+//SaveToText('Classes.txt', Results);
 OpenWrite(FileResults, 'Results.txt');
 CrossValidate(Antigens, {Folds:} 5, {Rounds:} 6, FileResults, {kNN:} 0);
 Close(FileResults);
-//ReadLn;
+ReadLn;
 //BatchCrossValidate;
 end.
